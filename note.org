@@ -1,0 +1,119 @@
+* 1. Speedb Dramatically Improves RocksDB Response Times and Performance Instability (P99)
+By: Yechiel (Hilik) Yochai | Co-Founder and Chief Scientist @ Speedb
+
+1. storage performance metrics
++ iops
+  a. (Input + Output Per Second) or throughput (MB/sec)
+  b. latency (response time)
+   AR = (Sum of all response times) / (Number of data points)
+   P99 which measures the STABILITY of the RESPONSE TIME, only 1% of the requests will be slower than your P99 latency target, which makes it useful for resource and performance planning
+
+2. Where and Why P99 Matters
+   AV  - If your application does random read and write operations that are independent by nature, you probably (usually) only care about the overall AVERAGE RESPONSE TIMES.
+   P99 - runs a list of (sequentially) dependent requests one after the other, or uses large batch operations
+   P99 - will harm your performance is if your application gives 100% of performance as long as the response time is below a certain threshold.
+
+3. RocksDB read Performance
+   - Random read performance on storage system that significant portion of the data on SSD and the index fits into the RAM.dependent only on the underlying SSD.
+   - Rocksdb: bloomfilter +  index size is very small compared to other approaches, lead to a better cache hit, and the fact that the data is semi-sorted allows you to also get very good performance in range queries.
+
+4. RocksDB Write Performance
+   optimization for small object writes
+   write performance suffers when the database size exceeds over 50GB. te write amplification may reach a very large number, which means that the system needs to do many reads and writes for each application write. 
+
+5. RocksDB Read Performance Suffers Under Mixed Workload Conditions
+    response time of mixed workload when the database is larger than the RAM, average response time and p99 is higher than the underlined potential SSD capabilities
+
+    Reason:
+    an integral and inherent part of using the LSM technology. The system performs background operations, like compaction and flushes in a relatively large quanta and during this time the load on the underlying storage device(s) increases and the response times trends up. 
+    in shard env is more bad, start their background jobs at the same time
+
+	
+    Even with a relatively low write rate (10%), the response time surpasses that of the SSD, leading to significantly higher average response time and P99 measurements. This issue becomes more pronounced in systems employing sharding across multiple instances.
+    
+6. LSM trees Are Not Inherently Limited on Read Performance or Related Stability
+   speedb use resource management, QoS controls to alleviate read-performance instability issues
+
+7. Speedb First RocksDB Challenge Solved:
+   Reducing RocksDB WAF (Write Amplification Factor) -  Multi-Dimensional Adaptive Compaction (in enterprise vesion)
+   Stabilize Read Performance and P99
+      Enhanced our own Multi-Dimensional Adaptive Compaction routines
+      Dynamically measure the compaction pressure and prioritize the compaction based on the pressure.
+      Adapt to the workload and assign dynamic QoS controls to the flush and compactions
+      Compaction scheduler, currently running on each instance
+8. benchmark
+   The tests simulates a sharded environment running 12 identical DBs 
+   Each DB is 100GB in allocated capacity, with an object size of 1K. 
+   On each of the 12 DBs we run a workload that contains 90% reads and only 10% overwrites.       
+
+#+BEGIN_SRC benchmark
+# prepare data
+mkdir -p result
+for i in 1 `seq 1 12` ; do
+./db_bench --compression_type=None -db=${db_dir}/$i -value_size=1000 -key_size=16 --delayed_write_rate=536870912 -report_interval_seconds=1 -max_write_buffer_number=4 -num_column_families=1 -db_write_buffer_size=0 -histogram -max_background_compactions=8 -cache_size=0 -max_background_flushes=4 -bloom_bits=10  --benchmarks=fillrandom,levelstats,memstats -num=100000000 -write_buffer_size=268435456 --memtablerep=skip_list  --statistics –report_file=result/${i}-fillrandom.csv & 
+done
+wait
+
+# w: read_rate_limit
+for w in `seq 5000 5000 20000` ; do
+# v: read ratio
+for v in 90 ; do
+for i in  `seq 1 12` ; do
+taskset 0xfffe ./db_bench --compression_type=None -db=${db_dir}/$i -num=100000000 -value_size=1000 -key_size=16 --delayed_write_rate=536870912 -report_interval_seconds=1 -max_write_buffer_number=4 -num_column_families=1 -db_write_buffer_size=0 -histogram -max_background_compactions=8 -cache_size=0 -max_background_flushes=4 -bloom_bits=10 -benchmark_read_rate_limit=$w  -report_file=result/rw-$i-$w-$v.csv  --benchmarks=readrandomwriterandom,levelstats,memstats -write_buffer_size=268435456 --memtablerep=skip_list --use_existing_db --readwritepercent=$v  --duration=900 --statistics --threads=50 --stats_dump_period_sec=30 --confidence_interval_only &
+done
+done
+wait
+
+grep rocksdb.db.get.micros ${db_dir}/1/LOG > result/$w-sum.$v
+#+END_SRC
+
+#+BEGIN_SRC db_bench meaning
+
+--compression_type=None
+-value_size=1000 -key_size=16 -num=100000000  // about 1k * 100M
+--delayed_write_rate=536870912  // 512M
+
+-num_column_families=1
+-cache_size=0                 // no block size
+-bloom_bits=10
+-db_write_buffer_size=0
+-write_buffer_size=268435456  // 256M * 4
+-max_write_buffer_number=4    // 
+--memtablerep=skip_list
+
+-histogram
+-report_interval_seconds=1
+
+-max_background_compactions=8
+-max_background_flushes=4
+--benchmarks=fillrandom,levelstats,memstats 
+
+--statistics
+–report_file=result/${i}-fillrandom.csv &
+
+
+
+
+
+
+--compression_type=None
+-num=100000000-value_size=1000 -key_size=16   // (16 + 1000) * 100M
+--delayed_write_rate=536870912                // 512M
+-report_interval_seconds=1 -histogram
+
+-num_column_families=1
+-db_write_buffer_size=0
+-cache_size=0 -bloom_bits=10
+-write_buffer_size=268435456 --memtablerep=skip_list         // memtable 256M * 4
+-max_write_buffer_number=4
+
+--threads=50
+-max_background_compactions=8  -max_background_flushes=4    
+-benchmark_read_rate_limit=$w
+-report_file=result/rw-$i-$w-$v.csv
+--benchmarks=readrandomwriterandom,levelstats,memstats
+--use_existing_db --readwritepercent=$v  --duration=900
+--statistics  --stats_dump_period_sec=30
+--confidence_interval_only &
+
+#+END_SRC
