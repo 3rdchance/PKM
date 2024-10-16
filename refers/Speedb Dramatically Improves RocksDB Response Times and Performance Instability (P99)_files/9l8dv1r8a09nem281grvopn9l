@@ -1,0 +1,9 @@
+<svg aria-hidden="true" role="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <svg>
+    <path fill="transparent" d="M0 0h128v128H0z"/>
+    <path fill="#788fa5" d="M112 80H16V64h96z"/>
+    <path fill="#9db3c8" d="M128 48H0V.18h128z"/>
+    <path fill="#788fa5" d="M16 96h64v16H16z"/>
+    <circle cx="40" cy="24" r="24" fill="#56687a"/>
+  </svg>
+</svg>
