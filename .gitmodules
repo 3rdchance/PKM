@@ -1,0 +1,6 @@
+[submodule "submoudules"]
+	path = submoudules
+	url = https://github.com/Moataz-Elmesmary/Data-Science-Roadmap.git
+[submodule "modules/Data-Science-Roadmap"]
+	path = modules/Data-Science-Roadmap
+	url = https://github.com/Moataz-Elmesmary/Data-Science-Roadmap.git
